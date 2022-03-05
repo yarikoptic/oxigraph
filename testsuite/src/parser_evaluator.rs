@@ -1,5 +1,5 @@
 use crate::evaluator::TestEvaluator;
-use crate::files::{guess_dataset_format, guess_graph_format, load_dataset, load_graph};
+use crate::files::{guess_dataset_format, guess_graph_format, load_dataset, load_graph, load_n3};
 use crate::manifest::Test;
 use crate::report::{dataset_diff, graph_diff};
 use anyhow::{anyhow, bail, Result};
@@ -22,6 +22,10 @@ pub fn register_parser_tests(evaluator: &mut TestEvaluator) {
         evaluate_positive_dataset_syntax_test(t, DatasetFormat::TriG)
     });
     evaluator.register(
+        "https://w3c.github.io/N3/tests/test.n3#TestN3PositiveSyntax",
+        evaluate_positive_n3_syntax_test,
+    );
+    evaluator.register(
         "http://www.w3.org/ns/rdftest#TestNTriplesNegativeSyntax",
         |t| evaluate_negative_graph_syntax_test(t, GraphFormat::NTriples),
     );
@@ -39,6 +43,10 @@ pub fn register_parser_tests(evaluator: &mut TestEvaluator) {
     evaluator.register("http://www.w3.org/ns/rdftest#TestXMLNegativeSyntax", |t| {
         evaluate_negative_graph_syntax_test(t, GraphFormat::RdfXml)
     });
+    evaluator.register(
+        "https://w3c.github.io/N3/tests/test.n3#TestN3NegativeSyntax",
+        evaluate_negative_n3_syntax_test,
+    );
     evaluator.register("http://www.w3.org/ns/rdftest#TestTurtleEval", |t| {
         evaluate_graph_eval_test(t, GraphFormat::Turtle)
     });
@@ -47,6 +55,9 @@ pub fn register_parser_tests(evaluator: &mut TestEvaluator) {
     });
     evaluator.register("http://www.w3.org/ns/rdftest#TestXMLEval", |t| {
         evaluate_graph_eval_test(t, GraphFormat::RdfXml)
+    });
+    evaluator.register("https://w3c.github.io/N3/tests/test.n3#TestN3Eval", |t| {
+        evaluate_n3_eval_test(t)
     });
     evaluator.register("http://www.w3.org/ns/rdftest#TestTurtleNegativeEval", |t| {
         evaluate_negative_graph_syntax_test(t, GraphFormat::Turtle)
@@ -74,6 +85,15 @@ fn evaluate_positive_dataset_syntax_test(test: &Test, format: DatasetFormat) -> 
     Ok(())
 }
 
+fn evaluate_positive_n3_syntax_test(test: &Test) -> Result<()> {
+    let action = test
+        .action
+        .as_deref()
+        .ok_or_else(|| anyhow!("No action found for test {test}"))?;
+    load_n3(action).map_err(|e| anyhow!("Parse error: {e}"))?;
+    Ok(())
+}
+
 fn evaluate_negative_graph_syntax_test(test: &Test, format: GraphFormat) -> Result<()> {
     let action = test
         .action
@@ -91,6 +111,18 @@ fn evaluate_negative_dataset_syntax_test(test: &Test, format: DatasetFormat) -> 
         .as_deref()
         .ok_or_else(|| anyhow!("No action found for test {test}"))?;
     match load_dataset(action, format) {
+        Ok(_) => bail!("File parsed without errors even if it should not"),
+        Err(_) => Ok(()),
+    }
+}
+
+
+fn evaluate_negative_n3_syntax_test(test: &Test) -> Result<()> {
+    let action = test
+        .action
+        .as_deref()
+        .ok_or_else(|| anyhow!("No action found for test {test}"))?;
+    match load_n3(action) {
         Ok(_) => bail!("File parsed without errors even if it should not"),
         Err(_) => Ok(()),
     }
@@ -144,4 +176,14 @@ fn evaluate_dataset_eval_test(test: &Test, format: DatasetFormat) -> Result<()> 
             dataset_diff(&expected_dataset, &actual_dataset)
         )
     }
+}
+
+fn evaluate_n3_eval_test(test: &Test) -> Result<()> {
+    let action = test
+        .action
+        .as_deref()
+        .ok_or_else(|| anyhow!("No action found for test {test}"))?;
+    load_n3(action).map_err(|e| anyhow!("Parse error on file {action}: {e}"))?;
+    //TODO: implement
+    Ok(())
 }

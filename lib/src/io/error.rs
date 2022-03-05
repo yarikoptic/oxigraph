@@ -60,6 +60,25 @@ impl From<TurtleError> for ParseError {
     }
 }
 
+impl From<oxttl::ParseError> for ParseError {
+    #[inline]
+    fn from(error: oxttl::ParseError) -> Self {
+        Self::Syntax(SyntaxError {
+            inner: SyntaxErrorKind::N3(error),
+        })
+    }
+}
+
+impl From<oxttl::ParseOrIoError> for ParseError {
+    #[inline]
+    fn from(error: oxttl::ParseOrIoError) -> Self {
+        match error {
+            oxttl::ParseOrIoError::Parse(e) => e.into(),
+            oxttl::ParseOrIoError::Io(e) => e.into(),
+        }
+    }
+}
+
 #[allow(clippy::fallible_impl_from)]
 impl From<RdfXmlError> for ParseError {
     #[inline]
@@ -108,6 +127,7 @@ pub struct SyntaxError {
 #[derive(Debug)]
 enum SyntaxErrorKind {
     Turtle(TurtleError),
+    N3(oxttl::ParseError),
     RdfXml(RdfXmlError),
     InvalidBaseIri { iri: String, error: IriParseError },
 }
@@ -117,6 +137,7 @@ impl fmt::Display for SyntaxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {
             SyntaxErrorKind::Turtle(e) => e.fmt(f),
+            SyntaxErrorKind::N3(e) => e.fmt(f),
             SyntaxErrorKind::RdfXml(e) => e.fmt(f),
             SyntaxErrorKind::InvalidBaseIri { iri, error } => {
                 write!(f, "Invalid base IRI '{iri}': {error}")
@@ -130,6 +151,7 @@ impl Error for SyntaxError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.inner {
             SyntaxErrorKind::Turtle(e) => Some(e),
+            SyntaxErrorKind::N3(e) => Some(e),
             SyntaxErrorKind::RdfXml(e) => Some(e),
             SyntaxErrorKind::InvalidBaseIri { .. } => None,
         }
@@ -141,6 +163,7 @@ impl From<SyntaxError> for io::Error {
     fn from(error: SyntaxError) -> Self {
         match error.inner {
             SyntaxErrorKind::Turtle(error) => error.into(),
+            SyntaxErrorKind::N3(error) => error.into(),
             SyntaxErrorKind::RdfXml(error) => error.into(),
             SyntaxErrorKind::InvalidBaseIri { iri, error } => Self::new(
                 io::ErrorKind::InvalidInput,

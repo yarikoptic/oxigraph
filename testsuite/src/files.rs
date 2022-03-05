@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use oxigraph::io::{DatasetFormat, DatasetParser, GraphFormat, GraphParser};
 use oxigraph::model::{Dataset, Graph};
+use oxttl::N3Parser;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
@@ -68,4 +69,16 @@ pub fn guess_dataset_format(url: &str) -> Result<DatasetFormat> {
     url.rsplit_once('.')
         .and_then(|(_, extension)| DatasetFormat::from_extension(extension))
         .ok_or_else(|| anyhow!("Serialization type not found for {url}"))
+}
+
+
+pub fn load_n3(url: &str) -> Result<()> {
+    for q in N3Parser::builder()
+        .with_base_iri(url)?
+        .with_prefix("", url)?
+        .with_read(read_file(url)?)
+    {
+        q?;
+    }
+    Ok(())
 }
