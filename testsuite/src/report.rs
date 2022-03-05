@@ -1,5 +1,5 @@
 use anyhow::Result;
-use oxigraph::model::{Dataset, NamedNode};
+use oxigraph::model::NamedNode;
 use std::fmt::Write;
 use text_diff::{diff, Difference};
 use time::format_description::well_known::Rfc3339;
@@ -12,14 +12,10 @@ pub struct TestResult {
     pub date: OffsetDateTime,
 }
 
-pub fn dataset_diff(expected: &Dataset, actual: &Dataset) -> String {
-    let (_, changeset) = diff(
-        &normalize_dataset_text(expected),
-        &normalize_dataset_text(actual),
-        "\n",
-    );
+pub fn elements_diff<V: ToString, S: IntoIterator<Item = V>>(expected: S, actual: S) -> String {
+    let (_, changeset) = diff(&elements_to_text(expected), &elements_to_text(actual), "\n");
     let mut ret = String::new();
-    ret.push_str("Note: missing quads in yellow and extra quads in blue\n");
+    ret.push_str("Note: missing elements in yellow and extra elements in blue\n");
     for seq in changeset {
         match seq {
             Difference::Same(x) => {
@@ -43,10 +39,10 @@ pub fn dataset_diff(expected: &Dataset, actual: &Dataset) -> String {
     ret
 }
 
-fn normalize_dataset_text(store: &Dataset) -> String {
-    let mut quads: Vec<_> = store.iter().map(|q| q.to_string()).collect();
-    quads.sort();
-    quads.join("\n")
+fn elements_to_text<V: ToString, S: IntoIterator<Item = V>>(elements: S) -> String {
+    let mut elements: Vec<_> = elements.into_iter().map(|q| q.to_string()).collect();
+    elements.sort();
+    elements.join("\n")
 }
 
 #[allow(unused_must_use)]

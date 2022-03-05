@@ -1,7 +1,7 @@
 use crate::evaluator::TestEvaluator;
 use crate::files::*;
 use crate::manifest::*;
-use crate::report::dataset_diff;
+use crate::report::elements_diff;
 use crate::vocab::*;
 use anyhow::{anyhow, Result};
 use oxigraph::model::vocab::*;
@@ -335,7 +335,7 @@ fn evaluate_update_evaluation_test(test: &Test) -> Result<()> {
                         Err(anyhow!(
                             "Failure on {}.\nDiff:\n{}\nParsed update:\n{}\n",
                             test,
-                            dataset_diff(&result_store_dataset, &store_dataset),
+                            elements_diff(&result_store_dataset, &store_dataset),
                             Update::parse(&read_file_to_string(update_file)?, Some(update_file))
                                 .unwrap(),
                         ))
@@ -363,7 +363,7 @@ fn load_sparql_query_result(url: &str) -> Result<StaticQueryResults> {
             false,
         )
     } else {
-        StaticQueryResults::from_graph(load_graph(url)?)
+        StaticQueryResults::from_graph(load_graph(url, None)?)
     }
 }
 

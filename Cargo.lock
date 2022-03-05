@@ -760,6 +760,7 @@ dependencies = [
  "oxiri",
  "oxrdf",
  "oxrocksdb-sys",
+ "oxttl",
  "rand",
  "regex",
  "rio_api",
@@ -809,6 +810,9 @@ dependencies = [
  "clap 4.0.18",
  "criterion",
  "oxigraph",
+ "oxttl",
+ "rio_api",
+ "rio_turtle",
  "text-diff",
  "time",
 ]
@@ -842,6 +846,16 @@ dependencies = [
  "bindgen",
  "cc",
  "libc",
+]
+
+[[package]]
+name = "oxttl"
+version = "0.1.0"
+dependencies = [
+ "memchr",
+ "oxilangtag",
+ "oxiri",
+ "oxrdf",
 ]
 
 [[package]]

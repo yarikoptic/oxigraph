@@ -16,11 +16,18 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 time = { version = "0.3", features = ["formatting"] }
 oxigraph = { version = "0.3.8", path="../lib" }
+oxttl = { version = "0.1.0", path= "../lib/oxttl" }
 text-diff = "0.4"
+rio_api = "0.7.1"
+rio_turtle = "0.7.1"
 
 [dev-dependencies]
 criterion = "0.4"
 
 [[bench]]
 name = "sparql_query"
+harness = false
+
+[[bench]]
+name = "parser"
 harness = false

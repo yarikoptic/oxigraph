@@ -4,9 +4,11 @@ pub use crate::io::error::{ParseError, SyntaxError};
 use crate::io::{DatasetFormat, GraphFormat};
 use crate::model::*;
 use oxiri::{Iri, IriParseError};
+use oxttl::nquads::{FromReadNQuadsReader, NQuadsParser};
+use oxttl::ntriples::{FromReadNTriplesReader, NTriplesParser};
 use rio_api::model as rio;
 use rio_api::parser::{QuadsParser, TriplesParser};
-use rio_turtle::{NQuadsParser, NTriplesParser, TriGParser, TurtleParser};
+use rio_turtle::{TriGParser, TurtleParser};
 use rio_xml::RdfXmlParser;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -71,9 +73,13 @@ impl GraphParser {
     #[allow(clippy::unnecessary_wraps)]
     pub fn read_triples<R: BufRead>(&self, reader: R) -> Result<TripleReader<R>, ParseError> {
         Ok(TripleReader {
-            mapper: RioMapper::default(),
+            mapper: BNodeMapper::default(),
             parser: match self.format {
-                GraphFormat::NTriples => TripleReaderKind::NTriples(NTriplesParser::new(reader)),
+                GraphFormat::NTriples => TripleReaderKind::NTriples(
+                    NTriplesParser::new()
+                        .with_quoted_triples()
+                        .parse_from_read(reader),
+                ),
                 GraphFormat::Turtle => {
                     TripleReaderKind::Turtle(TurtleParser::new(reader, self.base_iri.clone()))
                 }
@@ -104,14 +110,14 @@ impl GraphParser {
 /// ```
 #[must_use]
 pub struct TripleReader<R: BufRead> {
-    mapper: RioMapper,
+    mapper: BNodeMapper,
     parser: TripleReaderKind<R>,
     buffer: Vec<Triple>,
 }
 
 #[allow(clippy::large_enum_variant)]
 enum TripleReaderKind<R: BufRead> {
-    NTriples(NTriplesParser<R>),
+    NTriples(FromReadNTriplesReader<R>),
     Turtle(TurtleParser<R>),
     RdfXml(RdfXmlParser<R>),
 }
@@ -126,9 +132,13 @@ impl<R: BufRead> Iterator for TripleReader<R> {
             }
 
             if let Err(error) = match &mut self.parser {
-                TripleReaderKind::NTriples(parser) => {
-                    Self::read(parser, &mut self.buffer, &mut self.mapper)
-                }
+                TripleReaderKind::NTriples(parser) => Some(match parser.next()? {
+                    Ok(triple) => {
+                        self.buffer.push(self.mapper.triple(triple));
+                        Ok(())
+                    }
+                    Err(e) => Err(e.into()),
+                }),
                 TripleReaderKind::Turtle(parser) => {
                     Self::read(parser, &mut self.buffer, &mut self.mapper)
                 }
@@ -146,7 +156,7 @@ impl<R: BufRead> TripleReader<R> {
     fn read<P: TriplesParser>(
         parser: &mut P,
         buffer: &mut Vec<Triple>,
-        mapper: &mut RioMapper,
+        mapper: &mut BNodeMapper,
     ) -> Option<Result<(), ParseError>>
     where
         ParseError: From<P::Error>,
@@ -154,7 +164,7 @@ impl<R: BufRead> TripleReader<R> {
         if parser.is_end() {
             None
         } else if let Err(e) = parser.parse_step(&mut |t| {
-            buffer.push(mapper.triple(&t));
+            buffer.push(mapper.triple(RioMapper::triple(&t)));
             Ok(())
         }) {
             Some(Err(e))
@@ -223,9 +233,13 @@ impl DatasetParser {
     #[allow(clippy::unnecessary_wraps)]
     pub fn read_quads<R: BufRead>(&self, reader: R) -> Result<QuadReader<R>, ParseError> {
         Ok(QuadReader {
-            mapper: RioMapper::default(),
+            mapper: BNodeMapper::default(),
             parser: match self.format {
-                DatasetFormat::NQuads => QuadReaderKind::NQuads(NQuadsParser::new(reader)),
+                DatasetFormat::NQuads => QuadReaderKind::NQuads(
+                    NQuadsParser::new()
+                        .with_quoted_triples()
+                        .parse_from_read(reader),
+                ),
                 DatasetFormat::TriG => {
                     QuadReaderKind::TriG(TriGParser::new(reader, self.base_iri.clone()))
                 }
@@ -253,13 +267,13 @@ impl DatasetParser {
 /// ```
 #[must_use]
 pub struct QuadReader<R: BufRead> {
-    mapper: RioMapper,
+    mapper: BNodeMapper,
     parser: QuadReaderKind<R>,
     buffer: Vec<Quad>,
 }
 
 enum QuadReaderKind<R: BufRead> {
-    NQuads(NQuadsParser<R>),
+    NQuads(FromReadNQuadsReader<R>),
     TriG(TriGParser<R>),
 }
 
@@ -273,9 +287,13 @@ impl<R: BufRead> Iterator for QuadReader<R> {
             }
 
             if let Err(error) = match &mut self.parser {
-                QuadReaderKind::NQuads(parser) => {
-                    Self::read(parser, &mut self.buffer, &mut self.mapper)
-                }
+                QuadReaderKind::NQuads(parser) => Some(match parser.next()? {
+                    Ok(quad) => {
+                        self.buffer.push(self.mapper.quad(quad));
+                        Ok(())
+                    }
+                    Err(e) => Err(e.into()),
+                }),
                 QuadReaderKind::TriG(parser) => {
                     Self::read(parser, &mut self.buffer, &mut self.mapper)
                 }
@@ -290,7 +308,7 @@ impl<R: BufRead> QuadReader<R> {
     fn read<P: QuadsParser>(
         parser: &mut P,
         buffer: &mut Vec<Quad>,
-        mapper: &mut RioMapper,
+        mapper: &mut BNodeMapper,
     ) -> Option<Result<(), ParseError>>
     where
         ParseError: From<P::Error>,
@@ -298,7 +316,7 @@ impl<R: BufRead> QuadReader<R> {
         if parser.is_end() {
             None
         } else if let Err(e) = parser.parse_step(&mut |t| {
-            buffer.push(mapper.quad(&t));
+            buffer.push(mapper.quad(RioMapper::quad(&t)));
             Ok(())
         }) {
             Some(Err(e))
@@ -308,21 +326,15 @@ impl<R: BufRead> QuadReader<R> {
     }
 }
 
-#[derive(Default)]
-struct RioMapper {
-    bnode_map: HashMap<String, BlankNode>,
-}
+struct RioMapper {}
 
 impl<'a> RioMapper {
     fn named_node(node: rio::NamedNode<'a>) -> NamedNode {
         NamedNode::new_unchecked(node.iri)
     }
 
-    fn blank_node(&mut self, node: rio::BlankNode<'a>) -> BlankNode {
-        self.bnode_map
-            .entry(node.id.to_owned())
-            .or_insert_with(BlankNode::default)
-            .clone()
+    fn blank_node(node: rio::BlankNode<'a>) -> BlankNode {
+        BlankNode::new_unchecked(node.id)
     }
 
     fn literal(literal: rio::Literal<'a>) -> Literal {
@@ -337,43 +349,99 @@ impl<'a> RioMapper {
         }
     }
 
-    fn subject(&mut self, node: rio::Subject<'a>) -> Subject {
+    fn subject(node: rio::Subject<'a>) -> Subject {
         match node {
             rio::Subject::NamedNode(node) => Self::named_node(node).into(),
-            rio::Subject::BlankNode(node) => self.blank_node(node).into(),
-            rio::Subject::Triple(triple) => self.triple(triple).into(),
+            rio::Subject::BlankNode(node) => Self::blank_node(node).into(),
+            rio::Subject::Triple(triple) => Self::triple(triple).into(),
         }
     }
 
-    fn term(&mut self, node: rio::Term<'a>) -> Term {
+    fn term(node: rio::Term<'a>) -> Term {
         match node {
             rio::Term::NamedNode(node) => Self::named_node(node).into(),
-            rio::Term::BlankNode(node) => self.blank_node(node).into(),
+            rio::Term::BlankNode(node) => Self::blank_node(node).into(),
             rio::Term::Literal(literal) => Self::literal(literal).into(),
-            rio::Term::Triple(triple) => self.triple(triple).into(),
+            rio::Term::Triple(triple) => Self::triple(triple).into(),
         }
     }
 
-    fn triple(&mut self, triple: &rio::Triple<'a>) -> Triple {
+    fn triple(triple: &rio::Triple<'a>) -> Triple {
         Triple {
-            subject: self.subject(triple.subject),
+            subject: Self::subject(triple.subject),
             predicate: Self::named_node(triple.predicate),
-            object: self.term(triple.object),
+            object: Self::term(triple.object),
         }
     }
 
-    fn graph_name(&mut self, graph_name: Option<rio::GraphName<'a>>) -> GraphName {
+    fn graph_name(graph_name: Option<rio::GraphName<'a>>) -> GraphName {
         match graph_name {
             Some(rio::GraphName::NamedNode(node)) => Self::named_node(node).into(),
-            Some(rio::GraphName::BlankNode(node)) => self.blank_node(node).into(),
+            Some(rio::GraphName::BlankNode(node)) => Self::blank_node(node).into(),
             None => GraphName::DefaultGraph,
         }
     }
 
-    fn quad(&mut self, quad: &rio::Quad<'a>) -> Quad {
+    fn quad(quad: &rio::Quad<'a>) -> Quad {
+        Quad {
+            subject: Self::subject(quad.subject),
+            predicate: Self::named_node(quad.predicate),
+            object: Self::term(quad.object),
+            graph_name: Self::graph_name(quad.graph_name),
+        }
+    }
+}
+
+#[derive(Default)]
+struct BNodeMapper {
+    bnode_map: HashMap<BlankNode, BlankNode>,
+}
+
+impl BNodeMapper {
+    fn blank_node(&mut self, node: BlankNode) -> BlankNode {
+        self.bnode_map
+            .entry(node)
+            .or_insert_with(BlankNode::default)
+            .clone()
+    }
+
+    fn subject(&mut self, node: Subject) -> Subject {
+        match node {
+            Subject::NamedNode(node) => node.into(),
+            Subject::BlankNode(node) => self.blank_node(node).into(),
+            Subject::Triple(triple) => self.triple(*triple).into(),
+        }
+    }
+
+    fn term(&mut self, node: Term) -> Term {
+        match node {
+            Term::NamedNode(node) => node.into(),
+            Term::BlankNode(node) => self.blank_node(node).into(),
+            Term::Literal(literal) => literal.into(),
+            Term::Triple(triple) => self.triple(*triple).into(),
+        }
+    }
+
+    fn triple(&mut self, triple: Triple) -> Triple {
+        Triple {
+            subject: self.subject(triple.subject),
+            predicate: triple.predicate,
+            object: self.term(triple.object),
+        }
+    }
+
+    fn graph_name(&mut self, graph_name: GraphName) -> GraphName {
+        match graph_name {
+            GraphName::NamedNode(node) => node.into(),
+            GraphName::BlankNode(node) => self.blank_node(node).into(),
+            GraphName::DefaultGraph => GraphName::DefaultGraph,
+        }
+    }
+
+    fn quad(&mut self, quad: Quad) -> Quad {
         Quad {
             subject: self.subject(quad.subject),
-            predicate: Self::named_node(quad.predicate),
+            predicate: quad.predicate,
             object: self.term(quad.object),
             graph_name: self.graph_name(quad.graph_name),
         }

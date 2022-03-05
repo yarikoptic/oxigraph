@@ -85,6 +85,13 @@ impl Iterator for TestManifest {
                     if self.graph.triples_for_subject(&test_node).next().is_none() {
                         continue; // This test does not exists
                     }
+                    if self.graph.contains(TripleRef::new(
+                        &test_node,
+                        rdft::APPROVAL,
+                        rdft::REJECTED,
+                    )) {
+                        continue; // We do not run rejected tests
+                    }
                     let name = match self
                         .graph
                         .object_for_subject_predicate(&test_node, mf::NAME)
@@ -276,7 +283,7 @@ impl Iterator for TestManifest {
                     match self.manifests_to_do.pop_front() {
                         Some(url) => {
                             self.graph.clear();
-                            if let Err(error) = load_to_graph(&url, &mut self.graph) {
+                            if let Err(error) = load_to_graph(&url, &mut self.graph, None) {
                                 return Some(Err(error));
                             }
 
