@@ -1,4 +1,5 @@
 use crate::lexer::{N3Lexer, N3LexerMode, N3LexerOptions, N3Token};
+pub use crate::terse::{Base, Prefix};
 use crate::toolkit::{
     FromReadIterator, Lexer, ParseError, Parser, RuleRecognizer, RuleRecognizerError,
 };
@@ -14,17 +15,6 @@ use oxrdf::{
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Read;
-
-#[derive(Eq, PartialEq, Debug, Clone, Hash)]
-pub struct Prefix {
-    pub name: String,
-    pub iri: NamedNode,
-}
-
-#[derive(Eq, PartialEq, Debug, Clone, Hash)]
-pub struct Base {
-    pub iri: NamedNode,
-}
 
 #[derive(Eq, PartialEq, Debug, Clone, Hash)]
 pub enum N3Term {
@@ -214,6 +204,7 @@ impl N3ParserBuilder {
         Ok(self)
     }
 
+    #[inline]
     pub fn with_prefix(
         mut self,
         prefix_name: impl Into<String>,

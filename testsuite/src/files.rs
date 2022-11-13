@@ -19,6 +19,8 @@ pub fn read_file(url: &str) -> Result<impl BufRead> {
             "https://github.com/oxigraph/oxigraph/tests/",
             "oxigraph-tests/",
         )
+    } else if url.starts_with("http://drobilla.net/sw/serd/test/") {
+        url.replace("http://drobilla.net/sw/serd/test/", "serd-tests/")
     } else {
         bail!("Not supported url for file: {url}")
     });
@@ -70,7 +72,6 @@ pub fn guess_dataset_format(url: &str) -> Result<DatasetFormat> {
         .and_then(|(_, extension)| DatasetFormat::from_extension(extension))
         .ok_or_else(|| anyhow!("Serialization type not found for {url}"))
 }
-
 
 pub fn load_n3(url: &str) -> Result<()> {
     for q in N3Parser::builder()

@@ -1,37 +1,11 @@
 use anyhow::Result;
-use oxigraph_testsuite::evaluator::TestEvaluator;
-use oxigraph_testsuite::manifest::TestManifest;
-use oxigraph_testsuite::sparql_evaluator::register_sparql_tests;
-
-fn run_testsuite(manifest_url: &str, ignored_tests: Vec<&str>) -> Result<()> {
-    let mut evaluator = TestEvaluator::default();
-    register_sparql_tests(&mut evaluator);
-    let manifest = TestManifest::new(vec![manifest_url]);
-    let results = evaluator.evaluate(manifest)?;
-
-    let mut errors = Vec::default();
-    for result in results {
-        if let Err(error) = &result.outcome {
-            if !ignored_tests.contains(&result.test.as_str()) {
-                errors.push(format!("{}: failed with error {}", result.test, error))
-            }
-        }
-    }
-
-    assert!(
-        errors.is_empty(),
-        "{} failing tests:\n{}\n",
-        errors.len(),
-        errors.join("\n")
-    );
-    Ok(())
-}
+use oxigraph_testsuite::check_testsuite;
 
 #[test]
 fn sparql10_w3c_query_syntax_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql10/manifest-syntax.ttl",
-        vec![
+        &[
             "http://www.w3.org/2001/sw/DataAccess/tests/data-r2/syntax-sparql3/manifest#syn-bad-26", // tokenizer
         ],
     )
@@ -39,7 +13,7 @@ fn sparql10_w3c_query_syntax_testsuite() -> Result<()> {
 
 #[test]
 fn sparql10_w3c_query_evaluation_testsuite() -> Result<()> {
-    run_testsuite("https://w3c.github.io/rdf-tests/sparql/sparql10/manifest-evaluation.ttl", vec![
+    check_testsuite("https://w3c.github.io/rdf-tests/sparql/sparql10/manifest-evaluation.ttl", &[
         //Multiple writing of the same xsd:integer. Our system does strong normalization.
         "http://www.w3.org/2001/sw/DataAccess/tests/data-r2/distinct/manifest#distinct-1",
         "http://www.w3.org/2001/sw/DataAccess/tests/data-r2/distinct/manifest#distinct-9",
@@ -73,9 +47,9 @@ fn sparql10_w3c_query_evaluation_testsuite() -> Result<()> {
 
 #[test]
 fn sparql11_query_w3c_evaluation_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql11/manifest-sparql11-query.ttl",
-        vec![
+        &[
             //BNODE() scope is currently wrong
             "http://www.w3.org/2009/sparql/docs/tests/data-sparql11/functions/manifest#bnode01",
             //SERVICE name from a BGP
@@ -86,9 +60,9 @@ fn sparql11_query_w3c_evaluation_testsuite() -> Result<()> {
 
 #[test]
 fn sparql11_federation_w3c_evaluation_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql11/manifest-sparql11-fed.ttl",
-        vec![
+        &[
             // Problem during service evaluation order
             "http://www.w3.org/2009/sparql/docs/tests/data-sparql11/service/manifest#service5",
         ],
@@ -97,9 +71,9 @@ fn sparql11_federation_w3c_evaluation_testsuite() -> Result<()> {
 
 #[test]
 fn sparql11_update_w3c_evaluation_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql11/manifest-sparql11-update.ttl",
-        vec![
+        &[
             // We allow multiple INSERT DATA with the same blank nodes
             "http://www.w3.org/2009/sparql/docs/tests/data-sparql11/syntax-update-1/manifest#test_54",
         ],
@@ -108,17 +82,17 @@ fn sparql11_update_w3c_evaluation_testsuite() -> Result<()> {
 
 #[test]
 fn sparql11_json_w3c_evaluation_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql11/json-res/manifest.ttl",
-        vec![],
+        &[],
     )
 }
 
 #[test]
 fn sparql11_tsv_w3c_evaluation_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-tests/sparql/sparql11/csv-tsv-res/manifest.ttl",
-        vec![
+        &[
             // We do not run CSVResultFormatTest tests yet
             "http://www.w3.org/2009/sparql/docs/tests/data-sparql11/csv-tsv-res/manifest#csv01",
             "http://www.w3.org/2009/sparql/docs/tests/data-sparql11/csv-tsv-res/manifest#csv02",
@@ -129,16 +103,16 @@ fn sparql11_tsv_w3c_evaluation_testsuite() -> Result<()> {
 
 #[test]
 fn sparql_star_syntax_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-star/tests/sparql/syntax/manifest.ttl",
-        vec![],
+        &[],
     )
 }
 
 #[test]
 fn sparql_star_eval_testsuite() -> Result<()> {
-    run_testsuite(
+    check_testsuite(
         "https://w3c.github.io/rdf-star/tests/sparql/eval/manifest.ttl",
-        vec![],
+        &[],
     )
 }

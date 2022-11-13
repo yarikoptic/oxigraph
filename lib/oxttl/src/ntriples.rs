@@ -1,8 +1,7 @@
 //! A [N-Triples](https://www.w3.org/TR/n-triples/) streaming parser implemented by [`NTriplesParser`].
 
 use crate::line_formats::NQuadsRecognizer;
-use crate::toolkit::{FromReadIterator, ParseError, Parser};
-use crate::ParseOrIoError;
+use crate::toolkit::{FromReadIterator, ParseError, ParseOrIoError, Parser};
 use oxrdf::Triple;
 use std::io::Read;
 

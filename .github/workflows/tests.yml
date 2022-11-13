@@ -32,6 +32,8 @@ jobs:
       - run: cargo clippy
         working-directory: ./lib/oxrdf
       - run: cargo clippy
+        working-directory: ./lib/oxttl
+      - run: cargo clippy
         working-directory: ./lib/sparesults
       - run: cargo clippy
         working-directory: ./lib/spargebra
@@ -71,6 +73,8 @@ jobs:
         working-directory: ./lib/oxsdatatypes
       - run: cargo clippy --  -D warnings -D clippy::all
         working-directory: ./lib/oxrdf
+      - run: cargo clippy --  -D warnings -D clippy::all
+        working-directory: ./lib/oxttl
       - run: cargo clippy -- -D warnings -D clippy::all
         working-directory: ./lib/sparesults
       - run: cargo clippy -- -D warnings -D clippy::all

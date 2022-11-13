@@ -1,8 +1,7 @@
 //! A [N-Quads](https://www.w3.org/TR/n-quads/) streaming parser implemented by [`NQuadsParser`].
 
 use crate::line_formats::NQuadsRecognizer;
-use crate::toolkit::{FromReadIterator, ParseError, Parser};
-use crate::ParseOrIoError;
+use crate::toolkit::{FromReadIterator, ParseError, ParseOrIoError, Parser};
 use oxrdf::Quad;
 use std::io::Read;
 
@@ -224,7 +223,7 @@ impl LowLevelNQuadsReader {
         self.parser.is_end()
     }
 
-    /// Attempt to parse a new triple from the already provided data.
+    /// Attempt to parse a new quad from the already provided data.
     ///
     /// Returns [`None`] if the parsing is finished or more data is required.
     /// If it is the case more data should be fed using [`extend_from_slice`](Self::extend_from_slice).

@@ -945,7 +945,6 @@ dependencies = [
  "rand",
  "regex",
  "rio_api",
- "rio_turtle",
  "rio_xml",
  "sha-1",
  "sha2",

@@ -3,7 +3,9 @@
 use crate::lexer::{N3Lexer, N3LexerMode, N3LexerOptions, N3Token};
 use crate::toolkit::{Lexer, Parser, RuleRecognizer, RuleRecognizerError};
 use crate::{MAX_BUFFER_SIZE, MIN_BUFFER_SIZE};
-use oxrdf::{BlankNode, GraphName, Literal, NamedNode, Quad, Subject, Term, Triple};
+#[cfg(feature = "default")]
+use oxrdf::Triple;
+use oxrdf::{BlankNode, GraphName, Literal, NamedNode, Quad, Subject, Term};
 
 pub struct NQuadsRecognizer {
     stack: Vec<NQuadsState>,

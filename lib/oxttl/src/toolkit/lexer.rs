@@ -10,7 +10,7 @@ pub trait TokenRecognizer {
         Self: 'a;
     type Options: Default;
 
-    fn recognize_next<'a>(
+    fn recognize_next_token<'a>(
         &mut self,
         data: &'a [u8],
         is_ending: bool,
@@ -119,10 +119,11 @@ impl<R: TokenRecognizer> Lexer<R> {
         options: &R::Options,
     ) -> Option<Result<TokenWithPosition<R::Token<'_>>, LexerError>> {
         self.skip_whitespaces_and_comments()?;
-        let (consumed, result) = if let Some(r) =
-            self.parser
-                .recognize_next(&self.data[self.start..self.end], self.is_ending, options)
-        {
+        let (consumed, result) = if let Some(r) = self.parser.recognize_next_token(
+            &self.data[self.start..self.end],
+            self.is_ending,
+            options,
+        ) {
             r
         } else {
             return if self.is_ending {

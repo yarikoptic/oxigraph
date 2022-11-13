@@ -2,27 +2,28 @@ use crate::toolkit::{TokenRecognizer, TokenRecognizerError};
 use memchr::memchr2;
 use oxilangtag::LanguageTag;
 use oxiri::Iri;
+use std::borrow::Cow;
 use std::ops::Range;
 use std::str;
 
 // TODO: test TTL file "@prefix :<http://example.com>.:::."
 // TODO: fun stuff with '..'?
 
-const ALLOWED_SPARQL_KEYWORDS: [&str; 2] = ["PREFIX", "BASE"];
+const ALLOWED_SPARQL_KEYWORDS: [&str; 3] = ["PREFIX", "BASE", "GRAPH"];
 const ALLOWED_PLAIN_KEYWORDS: [&str; 5] = ["a", "has", "is", "of", "id"];
 const ALLOWED_AT_KEYWORDS: [&str; 2] = ["prefix", "base"];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum N3Token<'a> {
     IriRef(Iri<String>),
-    PrefixedName(&'a str, &'a str),
-    Variable(&'a str),
+    PrefixedName(&'a str, Cow<'a, str>),
+    Variable(Cow<'a, str>),
     BlankNodeLabel(&'a str),
     String(String),
     Integer(&'a str),
     Decimal(&'a str),
     Double(&'a str),
-    Boolean(bool),
+    Boolean(&'a str),
     LangTag(LanguageTag<String>),
     Punctuation(&'a str),
     PlainKeyword(&'a str),
@@ -59,7 +60,7 @@ impl TokenRecognizer for N3Lexer {
     type Token<'a> = N3Token<'a>;
     type Options = N3LexerOptions;
 
-    fn recognize_next<'a>(
+    fn recognize_next_token<'a>(
         &mut self,
         data: &'a [u8],
         is_ending: bool,
@@ -126,11 +127,24 @@ impl TokenRecognizer for N3Lexer {
             b')' => Some((1, Ok(N3Token::Punctuation(")")))),
             b'[' => Some((1, Ok(N3Token::Punctuation("[")))),
             b']' => Some((1, Ok(N3Token::Punctuation("]")))),
-            b'{' => Some((1, Ok(N3Token::Punctuation("{")))),
+            b'{' => {
+                if *data.get(1)? == b'|' {
+                    Some((2, Ok(N3Token::Punctuation("{|"))))
+                } else {
+                    Some((1, Ok(N3Token::Punctuation("{"))))
+                }
+            }
             b'}' => Some((1, Ok(N3Token::Punctuation("}")))),
             b',' => Some((1, Ok(N3Token::Punctuation(",")))),
             b';' => Some((1, Ok(N3Token::Punctuation(";")))),
             b'!' => Some((1, Ok(N3Token::Punctuation("!")))),
+            b'|' => {
+                if *data.get(1)? == b'}' {
+                    Some((2, Ok(N3Token::Punctuation("|}"))))
+                } else {
+                    Some((1, Ok(N3Token::Punctuation("|"))))
+                }
+            }
             b'=' => {
                 if *data.get(1)? == b'>' {
                     Some((2, Ok(N3Token::Punctuation("=>"))))
@@ -234,10 +248,7 @@ impl N3Lexer {
                         while data.get(i - 1).copied() == Some(b'.') {
                             i -= 1;
                         }
-                        let pn_prefix = match Self::str_from_bytes(&data[..i], "keyword", 0..i) {
-                            Ok(pn_prefix) => pn_prefix,
-                            Err(e) => return Some((i, Err(e))),
-                        };
+                        let pn_prefix = str::from_utf8(&data[..i]).unwrap();
                         for keyword in ALLOWED_SPARQL_KEYWORDS {
                             if pn_prefix.eq_ignore_ascii_case(keyword) {
                                 return Some((i, Ok(N3Token::PlainKeyword(keyword))));
@@ -248,11 +259,8 @@ impl N3Lexer {
                                 return Some((i, Ok(N3Token::PlainKeyword(keyword))));
                             }
                         }
-                        if pn_prefix == "true" {
-                            return Some((i, Ok(N3Token::Boolean(true))));
-                        }
-                        if pn_prefix == "false" {
-                            return Some((i, Ok(N3Token::Boolean(false))));
+                        if pn_prefix == "true" || pn_prefix == "false" {
+                            return Some((i, Ok(N3Token::Boolean(pn_prefix))));
                         }
                         return Some((
                             i,
@@ -263,10 +271,7 @@ impl N3Lexer {
                 Err(e) => return Some((i + e.position.end, Err(e))),
             }
         }
-        let pn_prefix = match Self::str_from_bytes(&data[..i - 1], "prefix name", 0..i - 1) {
-            Ok(pn_prefix) => pn_prefix,
-            Err(e) => return Some((i, Err(e))),
-        };
+        let pn_prefix = str::from_utf8(&data[..i - 1]).unwrap();
         if pn_prefix.ends_with('.') {
             return Some((
                 i,
@@ -307,9 +312,11 @@ impl N3Lexer {
     fn recognize_optional_pn_local<'a>(
         &self,
         data: &'a [u8],
-    ) -> Option<(usize, Result<&'a str, TokenRecognizerError>)> {
+    ) -> Option<(usize, Result<Cow<'a, str>, TokenRecognizerError>)> {
         // [168s] 	PN_LOCAL 	::= 	(PN_CHARS_U | ':' | [0-9] | PLX) ((PN_CHARS | '.' | ':' | PLX)* (PN_CHARS | ':' | PLX))?
         let mut i = 0;
+        let mut buffer = None; // Buffer if there are some escaped characters
+        let mut position_that_is_already_in_buffer = 0;
         loop {
             match Self::recognize_unicode_char(&data[i..], i)? {
                 Ok((c, consumed)) => {
@@ -355,20 +362,46 @@ impl N3Lexer {
                                 i..i+1, format!("The character that are allowed to be escaped in IRIs are _~.-!$&'()*+,;=/?#@%, found '{a}'")
                             ).into())));
                         }
+                        let buffer = buffer.get_or_insert_with(String::new);
+                        // We add the missing bytes
+                        if i - position_that_is_already_in_buffer > 1 {
+                            buffer.push_str(
+                                str::from_utf8(&data[position_that_is_already_in_buffer..i - 1])
+                                    .unwrap(),
+                            )
+                        }
+                        buffer.push(a);
                         i += 1;
+                        position_that_is_already_in_buffer = i;
                     } else if i == 0 {
                         if !(Self::is_possible_pn_chars_u(c) || c == ':' || c.is_ascii_digit()) {
-                            return Some((0, Ok("")));
+                            return Some((0, Ok(Cow::Borrowed(""))));
                         }
                         i += consumed;
                     } else if Self::is_possible_pn_chars(c) || c == ':' || c == '.' {
                         i += consumed;
                     } else {
-                        // We do not include the last dot
-                        while data.get(i - 1).copied() == Some(b'.') {
-                            i -= 1;
-                        }
-                        return Some((i, Self::str_from_bytes(&data[..i], "local name", 0..i)));
+                        let buffer = if let Some(mut buffer) = buffer {
+                            buffer.push_str(
+                                str::from_utf8(&data[position_that_is_already_in_buffer..i])
+                                    .unwrap(),
+                            );
+                            // We do not include the last dot
+                            while buffer.ends_with('.') {
+                                buffer.pop();
+                                i -= 1;
+                            }
+                            Cow::Owned(buffer)
+                        } else {
+                            let mut data = str::from_utf8(&data[..i]).unwrap();
+                            // We do not include the last dot
+                            while let Some(d) = data.strip_suffix(".") {
+                                data = d;
+                                i -= 1;
+                            }
+                            Cow::Borrowed(data)
+                        };
+                        return Some((i, Ok(buffer)));
                     }
                 }
                 Err(e) => return Some((i + e.position.end, Err(e))),
@@ -394,8 +427,7 @@ impl N3Lexer {
                             i -= 1;
                             return Some((
                                 i,
-                                Self::str_from_bytes(&data[..i], "blank node id", 0..i)
-                                    .map(N3Token::BlankNodeLabel),
+                                Ok(N3Token::BlankNodeLabel(str::from_utf8(&data[..i]).unwrap())),
                             ));
                         }
                     } else if i == 0 {
@@ -407,14 +439,12 @@ impl N3Lexer {
                         i -= 1;
                         return Some((
                             i,
-                            Self::str_from_bytes(&data[..i], "blank node id", 0..i)
-                                .map(N3Token::BlankNodeLabel),
+                            Ok(N3Token::BlankNodeLabel(str::from_utf8(&data[..i]).unwrap())),
                         ));
                     } else {
                         return Some((
                             i,
-                            Self::str_from_bytes(&data[..i], "blank node id", 0..i)
-                                .map(N3Token::BlankNodeLabel),
+                            Ok(N3Token::BlankNodeLabel(str::from_utf8(&data[..i]).unwrap())),
                         ));
                     }
                     i += consumed;
@@ -456,8 +486,7 @@ impl N3Lexer {
         lang_tag_or_keyword: &[u8],
         position: Range<usize>,
     ) -> Result<N3Token<'static>, TokenRecognizerError> {
-        let lang_tag_or_keyword =
-            Self::str_from_bytes(lang_tag_or_keyword, "language tag", position.clone())?;
+        let lang_tag_or_keyword = str::from_utf8(lang_tag_or_keyword).unwrap();
         for keyword in ALLOWED_AT_KEYWORDS {
             if lang_tag_or_keyword == keyword {
                 return Ok(N3Token::AtKeyword(keyword));
@@ -475,23 +504,34 @@ impl N3Lexer {
     ) -> Option<(usize, Result<N3Token<'static>, TokenRecognizerError>)> {
         // [22] 	STRING_LITERAL_QUOTE 	::= 	'"' ([^#x22#x5C#xA#xD] | ECHAR | UCHAR)* '"' /* #x22=" #x5C=\ #xA=new line #xD=carriage return */
         // [23] 	STRING_LITERAL_SINGLE_QUOTE 	::= 	"'" ([^#x27#x5C#xA#xD] | ECHAR | UCHAR)* "'" /* #x27=' #x5C=\ #xA=new line #xD=carriage return */
-        let mut string = Vec::new();
+        let mut string = String::new();
         let mut i = 1;
         loop {
             let end = memchr2(delimiter, b'\\', &data[i..])?;
-            string.extend_from_slice(&data[i..i + end]);
+            match str::from_utf8(&data[i..i + end]) {
+                Ok(a) => string.push_str(a),
+                Err(e) => {
+                    return Some((
+                        end,
+                        Err((
+                            i..i + end,
+                            format!("The string contains invalid UTF-8 characters: {e}"),
+                        )
+                            .into()),
+                    ))
+                }
+            };
             i += end;
             match data[i] {
                 c if c == delimiter => {
-                    return Some((i + 1, Self::parse_string(string, 0..i + 1)));
+                    return Some((i + 1, Ok(N3Token::String(string))));
                 }
                 b'\\' => {
                     let (additional, c) = Self::recognize_escape(&data[i..], i, true)?;
                     i += additional + 1;
                     match c {
                         Ok(c) => {
-                            let mut buf = [0; 4];
-                            string.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                            string.push(c);
                         }
                         Err(e) => return Some((i, Err(e))),
                     }
@@ -508,19 +548,31 @@ impl N3Lexer {
     ) -> Option<(usize, Result<N3Token<'static>, TokenRecognizerError>)> {
         // [24] 	STRING_LITERAL_LONG_SINGLE_QUOTE 	::= 	"'''" (("'" | "''")? ([^'\] | ECHAR | UCHAR))* "'''"
         // [25] 	STRING_LITERAL_LONG_QUOTE 	::= 	'"""' (('"' | '""')? ([^"\] | ECHAR | UCHAR))* '"""'
-        let mut string = Vec::new();
+        let mut string = String::new();
         let mut i = 3;
         loop {
             let end = memchr2(delimiter, b'\\', &data[i..])?;
-            string.extend_from_slice(&data[i..i + end]);
+            match str::from_utf8(&data[i..i + end]) {
+                Ok(a) => string.push_str(a),
+                Err(e) => {
+                    return Some((
+                        end,
+                        Err((
+                            i..i + end,
+                            format!("The string contains invalid UTF-8 characters: {e}"),
+                        )
+                            .into()),
+                    ))
+                }
+            };
             i += end;
             match data[i] {
                 c if c == delimiter => {
                     if *data.get(i + 1)? == delimiter && *data.get(i + 2)? == delimiter {
-                        return Some((i + 3, Self::parse_string(string, 0..i + 3)));
+                        return Some((i + 3, Ok(N3Token::String(string))));
                     } else {
                         i += 1;
-                        string.push(delimiter);
+                        string.push(char::from(delimiter));
                     }
                 }
                 b'\\' => {
@@ -528,8 +580,7 @@ impl N3Lexer {
                     i += additional + 1;
                     match c {
                         Ok(c) => {
-                            let mut buf = [0; 4];
-                            string.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                            string.push(c);
                         }
                         Err(e) => return Some((i, Err(e))),
                     }
@@ -537,19 +588,6 @@ impl N3Lexer {
                 _ => unreachable!(),
             }
         }
-    }
-
-    fn parse_string(
-        string: Vec<u8>,
-        position: Range<usize>,
-    ) -> Result<N3Token<'static>, TokenRecognizerError> {
-        let string = String::from_utf8(string).map_err(|e| {
-            (
-                position.clone(),
-                format!("The string contains invalid UTF-8 characters: {e}"),
-            )
-        })?;
-        Ok(N3Token::String(string))
     }
 
     fn recognize_number<'a>(
@@ -560,11 +598,9 @@ impl N3Lexer {
         // [20] 	DECIMAL 	::= 	[+-]? [0-9]* '.' [0-9]+
         // [21] 	DOUBLE 	::= 	[+-]? ([0-9]+ '.' [0-9]* EXPONENT | '.' [0-9]+ EXPONENT | [0-9]+ EXPONENT)
         // [154s] 	EXPONENT 	::= 	[eE] [+-]? [0-9]+
-        let mut value = String::new();
         let mut i = 0;
         let c = *data.first()?;
         if matches!(c, b'+' | b'-') {
-            value.push(char::from(c));
             i += 1;
         }
         // We read the digits before .
@@ -572,7 +608,6 @@ impl N3Lexer {
         loop {
             let c = *data.get(i)?;
             if c.is_ascii_digit() {
-                value.push(char::from(c));
                 i += 1;
                 count_before += 1;
             } else {
@@ -582,14 +617,12 @@ impl N3Lexer {
 
         // We read the digits after .
         let count_after = if *data.get(i)? == b'.' {
-            value.push('.');
             i += 1;
 
             let mut count_after = 0;
             loop {
                 let c = *data.get(i)?;
                 if c.is_ascii_digit() {
-                    value.push(char::from(c));
                     i += 1;
                     count_after += 1;
                 } else {
@@ -604,12 +637,10 @@ impl N3Lexer {
         // End
         let c = *data.get(i)?;
         if matches!(c, b'e' | b'E') {
-            value.push(char::from(c));
             i += 1;
 
             let c = *data.get(i)?;
             if matches!(c, b'+' | b'-') {
-                value.push(char::from(c));
                 i += 1;
             }
 
@@ -617,7 +648,6 @@ impl N3Lexer {
             loop {
                 let c = *data.get(i)?;
                 if c.is_ascii_digit() {
-                    value.push(char::from(c));
                     i += 1;
                     found = true;
                 } else {
@@ -631,27 +661,23 @@ impl N3Lexer {
                 } else if count_before == 0 && count_after.unwrap_or(0) == 0 {
                     Err((0..i, "A double should not be empty").into())
                 } else {
-                    Self::str_from_bytes(&data[..i], "double", 0..i).map(N3Token::Double)
+                    Ok(N3Token::Double(str::from_utf8(&data[..i]).unwrap()))
                 },
             ))
         } else if let Some(count_after) = count_after {
             if count_after == 0 {
                 // We do not consume the '.' after all
-                value.pop();
                 i -= 1;
                 Some((
                     i,
                     if count_before == 0 {
                         Err((0..i, "An integer should not be empty").into())
                     } else {
-                        Self::str_from_bytes(&data[..i], "integer", 0..i).map(N3Token::Integer)
+                        Ok(N3Token::Integer(str::from_utf8(&data[..i]).unwrap()))
                     },
                 ))
             } else {
-                Some((
-                    i,
-                    Self::str_from_bytes(&data[..i], "decimal", 0..i).map(N3Token::Decimal),
-                ))
+                Some((i, Ok(N3Token::Decimal(str::from_utf8(&data[..i]).unwrap()))))
             }
         } else {
             Some((
@@ -659,24 +685,10 @@ impl N3Lexer {
                 if count_before == 0 {
                     Err((0..i, "An integer should not be empty").into())
                 } else {
-                    Self::str_from_bytes(&data[..i], "integer", 0..i).map(N3Token::Integer)
+                    Ok(N3Token::Integer(str::from_utf8(&data[..i]).unwrap()))
                 },
             ))
         }
-    }
-
-    fn str_from_bytes<'a>(
-        bytes: &'a [u8],
-        kind: &'static str,
-        range: Range<usize>,
-    ) -> Result<&'a str, TokenRecognizerError> {
-        str::from_utf8(bytes).map_err(|e| {
-            (
-                range,
-                format!("The {kind} contains invalid UTF-8 characters: {e}"),
-            )
-                .into()
-        })
     }
 
     fn recognize_escape(
@@ -723,8 +735,12 @@ impl N3Lexer {
         if data.len() < len {
             return Ok(None);
         }
-        let val =
-            Self::str_from_bytes(&data[..len], "escapesequence", position..position + len + 2)?;
+        let val = str::from_utf8(&data[..len]).map_err(|e| {
+            (
+                position..position + len + 2,
+                format!("The escape sequence contains invalid UTF-8 characters: {e}"),
+            )
+        })?;
         let codepoint = u32::from_str_radix(val, 16).map_err(|e| {
             (
                 position..position + len + 2,

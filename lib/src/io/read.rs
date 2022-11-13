@@ -6,9 +6,10 @@ use crate::model::*;
 use oxiri::{Iri, IriParseError};
 use oxttl::nquads::{FromReadNQuadsReader, NQuadsParser};
 use oxttl::ntriples::{FromReadNTriplesReader, NTriplesParser};
+use oxttl::trig::{FromReadTriGReader, TriGParser};
+use oxttl::turtle::{FromReadTurtleReader, TurtleParser};
 use rio_api::model as rio;
-use rio_api::parser::{QuadsParser, TriplesParser};
-use rio_turtle::{TriGParser, TurtleParser};
+use rio_api::parser::TriplesParser;
 use rio_xml::RdfXmlParser;
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -34,8 +35,13 @@ use std::io::BufRead;
 /// # std::io::Result::Ok(())
 /// ```
 pub struct GraphParser {
-    format: GraphFormat,
-    base_iri: Option<Iri<String>>,
+    inner: GraphParserKind,
+}
+
+enum GraphParserKind {
+    NTriples(NTriplesParser),
+    Turtle(TurtleParser),
+    RdfXml { base_iri: Option<Iri<String>> },
 }
 
 impl GraphParser {
@@ -43,8 +49,15 @@ impl GraphParser {
     #[inline]
     pub fn from_format(format: GraphFormat) -> Self {
         Self {
-            format,
-            base_iri: None,
+            inner: match format {
+                GraphFormat::NTriples => {
+                    GraphParserKind::NTriples(NTriplesParser::new().with_quoted_triples())
+                }
+                GraphFormat::Turtle => {
+                    GraphParserKind::Turtle(TurtleParser::new().with_quoted_triples())
+                }
+                GraphFormat::RdfXml => GraphParserKind::RdfXml { base_iri: None },
+            },
         }
     }
 
@@ -64,27 +77,29 @@ impl GraphParser {
     /// # Result::<_,Box<dyn std::error::Error>>::Ok(())
     /// ```
     #[inline]
-    pub fn with_base_iri(mut self, base_iri: impl Into<String>) -> Result<Self, IriParseError> {
-        self.base_iri = Some(Iri::parse(base_iri.into())?);
-        Ok(self)
+    pub fn with_base_iri(self, base_iri: impl Into<String>) -> Result<Self, IriParseError> {
+        Ok(Self {
+            inner: match self.inner {
+                GraphParserKind::NTriples(p) => GraphParserKind::NTriples(p),
+                GraphParserKind::Turtle(p) => GraphParserKind::Turtle(p.with_base_iri(base_iri)?),
+                GraphParserKind::RdfXml { .. } => GraphParserKind::RdfXml {
+                    base_iri: Some(Iri::parse(base_iri.into())?),
+                },
+            },
+        })
     }
 
     /// Executes the parsing itself on a [`BufRead`](std::io::BufRead) implementation and returns an iterator of triples.
-    #[allow(clippy::unnecessary_wraps)]
     pub fn read_triples<R: BufRead>(&self, reader: R) -> Result<TripleReader<R>, ParseError> {
         Ok(TripleReader {
             mapper: BNodeMapper::default(),
-            parser: match self.format {
-                GraphFormat::NTriples => TripleReaderKind::NTriples(
-                    NTriplesParser::new()
-                        .with_quoted_triples()
-                        .parse_from_read(reader),
-                ),
-                GraphFormat::Turtle => {
-                    TripleReaderKind::Turtle(TurtleParser::new(reader, self.base_iri.clone()))
+            parser: match &self.inner {
+                GraphParserKind::NTriples(p) => {
+                    TripleReaderKind::NTriples(p.parse_from_read(reader))
                 }
-                GraphFormat::RdfXml => {
-                    TripleReaderKind::RdfXml(RdfXmlParser::new(reader, self.base_iri.clone()))
+                GraphParserKind::Turtle(p) => TripleReaderKind::Turtle(p.parse_from_read(reader)),
+                GraphParserKind::RdfXml { base_iri } => {
+                    TripleReaderKind::RdfXml(RdfXmlParser::new(reader, base_iri.clone()))
                 }
             },
             buffer: Vec::new(),
@@ -118,7 +133,7 @@ pub struct TripleReader<R: BufRead> {
 #[allow(clippy::large_enum_variant)]
 enum TripleReaderKind<R: BufRead> {
     NTriples(FromReadNTriplesReader<R>),
-    Turtle(TurtleParser<R>),
+    Turtle(FromReadTurtleReader<R>),
     RdfXml(RdfXmlParser<R>),
 }
 
@@ -131,45 +146,28 @@ impl<R: BufRead> Iterator for TripleReader<R> {
                 return Some(Ok(r));
             }
 
-            if let Err(error) = match &mut self.parser {
-                TripleReaderKind::NTriples(parser) => Some(match parser.next()? {
-                    Ok(triple) => {
-                        self.buffer.push(self.mapper.triple(triple));
-                        Ok(())
-                    }
+            return Some(match &mut self.parser {
+                TripleReaderKind::NTriples(parser) => match parser.next()? {
+                    Ok(triple) => Ok(self.mapper.triple(triple)),
                     Err(e) => Err(e.into()),
-                }),
-                TripleReaderKind::Turtle(parser) => {
-                    Self::read(parser, &mut self.buffer, &mut self.mapper)
-                }
+                },
+                TripleReaderKind::Turtle(parser) => match parser.next()? {
+                    Ok(triple) => Ok(self.mapper.triple(triple)),
+                    Err(e) => Err(e.into()),
+                },
                 TripleReaderKind::RdfXml(parser) => {
-                    Self::read(parser, &mut self.buffer, &mut self.mapper)
+                    if parser.is_end() {
+                        return None;
+                    } else if let Err(e) = parser.parse_step(&mut |t| {
+                        self.buffer.push(self.mapper.triple(RioMapper::triple(&t)));
+                        Ok(())
+                    }) {
+                        Err(e)
+                    } else {
+                        continue;
+                    }
                 }
-            }? {
-                return Some(Err(error));
-            }
-        }
-    }
-}
-
-impl<R: BufRead> TripleReader<R> {
-    fn read<P: TriplesParser>(
-        parser: &mut P,
-        buffer: &mut Vec<Triple>,
-        mapper: &mut BNodeMapper,
-    ) -> Option<Result<(), ParseError>>
-    where
-        ParseError: From<P::Error>,
-    {
-        if parser.is_end() {
-            None
-        } else if let Err(e) = parser.parse_step(&mut |t| {
-            buffer.push(mapper.triple(RioMapper::triple(&t)));
-            Ok(())
-        }) {
-            Some(Err(e))
-        } else {
-            Some(Ok(()))
+            });
         }
     }
 }
@@ -194,8 +192,12 @@ impl<R: BufRead> TripleReader<R> {
 /// # std::io::Result::Ok(())
 /// ```
 pub struct DatasetParser {
-    format: DatasetFormat,
-    base_iri: Option<Iri<String>>,
+    inner: DatasetParserKind,
+}
+
+enum DatasetParserKind {
+    NQuads(NQuadsParser),
+    TriG(TriGParser),
 }
 
 impl DatasetParser {
@@ -203,8 +205,14 @@ impl DatasetParser {
     #[inline]
     pub fn from_format(format: DatasetFormat) -> Self {
         Self {
-            format,
-            base_iri: None,
+            inner: match format {
+                DatasetFormat::NQuads => {
+                    DatasetParserKind::NQuads(NQuadsParser::new().with_quoted_triples())
+                }
+                DatasetFormat::TriG => {
+                    DatasetParserKind::TriG(TriGParser::new().with_quoted_triples())
+                }
+            },
         }
     }
 
@@ -224,27 +232,23 @@ impl DatasetParser {
     /// # Result::<_,Box<dyn std::error::Error>>::Ok(())
     /// ```
     #[inline]
-    pub fn with_base_iri(mut self, base_iri: impl Into<String>) -> Result<Self, IriParseError> {
-        self.base_iri = Some(Iri::parse(base_iri.into())?);
-        Ok(self)
+    pub fn with_base_iri(self, base_iri: impl Into<String>) -> Result<Self, IriParseError> {
+        Ok(Self {
+            inner: match self.inner {
+                DatasetParserKind::NQuads(p) => DatasetParserKind::NQuads(p),
+                DatasetParserKind::TriG(p) => DatasetParserKind::TriG(p.with_base_iri(base_iri)?),
+            },
+        })
     }
 
     /// Executes the parsing itself on a [`BufRead`](std::io::BufRead) implementation and returns an iterator of quads.
-    #[allow(clippy::unnecessary_wraps)]
     pub fn read_quads<R: BufRead>(&self, reader: R) -> Result<QuadReader<R>, ParseError> {
         Ok(QuadReader {
             mapper: BNodeMapper::default(),
-            parser: match self.format {
-                DatasetFormat::NQuads => QuadReaderKind::NQuads(
-                    NQuadsParser::new()
-                        .with_quoted_triples()
-                        .parse_from_read(reader),
-                ),
-                DatasetFormat::TriG => {
-                    QuadReaderKind::TriG(TriGParser::new(reader, self.base_iri.clone()))
-                }
+            parser: match &self.inner {
+                DatasetParserKind::NQuads(p) => QuadReaderKind::NQuads(p.parse_from_read(reader)),
+                DatasetParserKind::TriG(p) => QuadReaderKind::TriG(p.parse_from_read(reader)),
             },
-            buffer: Vec::new(),
         })
     }
 }
@@ -269,60 +273,27 @@ impl DatasetParser {
 pub struct QuadReader<R: BufRead> {
     mapper: BNodeMapper,
     parser: QuadReaderKind<R>,
-    buffer: Vec<Quad>,
 }
 
 enum QuadReaderKind<R: BufRead> {
     NQuads(FromReadNQuadsReader<R>),
-    TriG(TriGParser<R>),
+    TriG(FromReadTriGReader<R>),
 }
 
 impl<R: BufRead> Iterator for QuadReader<R> {
     type Item = Result<Quad, ParseError>;
 
     fn next(&mut self) -> Option<Result<Quad, ParseError>> {
-        loop {
-            if let Some(r) = self.buffer.pop() {
-                return Some(Ok(r));
-            }
-
-            if let Err(error) = match &mut self.parser {
-                QuadReaderKind::NQuads(parser) => Some(match parser.next()? {
-                    Ok(quad) => {
-                        self.buffer.push(self.mapper.quad(quad));
-                        Ok(())
-                    }
-                    Err(e) => Err(e.into()),
-                }),
-                QuadReaderKind::TriG(parser) => {
-                    Self::read(parser, &mut self.buffer, &mut self.mapper)
-                }
-            }? {
-                return Some(Err(error));
-            }
-        }
-    }
-}
-
-impl<R: BufRead> QuadReader<R> {
-    fn read<P: QuadsParser>(
-        parser: &mut P,
-        buffer: &mut Vec<Quad>,
-        mapper: &mut BNodeMapper,
-    ) -> Option<Result<(), ParseError>>
-    where
-        ParseError: From<P::Error>,
-    {
-        if parser.is_end() {
-            None
-        } else if let Err(e) = parser.parse_step(&mut |t| {
-            buffer.push(mapper.quad(RioMapper::quad(&t)));
-            Ok(())
-        }) {
-            Some(Err(e))
-        } else {
-            Some(Ok(()))
-        }
+        Some(match &mut self.parser {
+            QuadReaderKind::NQuads(parser) => match parser.next()? {
+                Ok(quad) => Ok(self.mapper.quad(quad)),
+                Err(e) => Err(e.into()),
+            },
+            QuadReaderKind::TriG(parser) => match parser.next()? {
+                Ok(quad) => Ok(self.mapper.quad(quad)),
+                Err(e) => Err(e.into()),
+            },
+        })
     }
 }
 
@@ -373,23 +344,6 @@ impl<'a> RioMapper {
             object: Self::term(triple.object),
         }
     }
-
-    fn graph_name(graph_name: Option<rio::GraphName<'a>>) -> GraphName {
-        match graph_name {
-            Some(rio::GraphName::NamedNode(node)) => Self::named_node(node).into(),
-            Some(rio::GraphName::BlankNode(node)) => Self::blank_node(node).into(),
-            None => GraphName::DefaultGraph,
-        }
-    }
-
-    fn quad(quad: &rio::Quad<'a>) -> Quad {
-        Quad {
-            subject: Self::subject(quad.subject),
-            predicate: Self::named_node(quad.predicate),
-            object: Self::term(quad.object),
-            graph_name: Self::graph_name(quad.graph_name),
-        }
-    }
 }
 
 #[derive(Default)]
@@ -399,10 +353,14 @@ struct BNodeMapper {
 
 impl BNodeMapper {
     fn blank_node(&mut self, node: BlankNode) -> BlankNode {
-        self.bnode_map
-            .entry(node)
-            .or_insert_with(BlankNode::default)
-            .clone()
+        if node.as_ref().unique_id().is_some() {
+            node // It's already randomly generated
+        } else {
+            self.bnode_map
+                .entry(node)
+                .or_insert_with(BlankNode::default)
+                .clone()
+        }
     }
 
     fn subject(&mut self, node: Subject) -> Subject {

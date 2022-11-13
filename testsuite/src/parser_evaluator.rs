@@ -116,7 +116,6 @@ fn evaluate_negative_dataset_syntax_test(test: &Test, format: DatasetFormat) -> 
     }
 }
 
-
 fn evaluate_negative_n3_syntax_test(test: &Test) -> Result<()> {
     let action = test
         .action
