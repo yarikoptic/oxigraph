@@ -395,7 +395,7 @@ impl N3Lexer {
                         } else {
                             let mut data = str::from_utf8(&data[..i]).unwrap();
                             // We do not include the last dot
-                            while let Some(d) = data.strip_suffix(".") {
+                            while let Some(d) = data.strip_suffix('.') {
                                 data = d;
                                 i -= 1;
                             }

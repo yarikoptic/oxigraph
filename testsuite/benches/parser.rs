@@ -5,6 +5,8 @@ use oxigraph_testsuite::manifest::TestManifest;
 use rio_api::parser::*;
 use rio_turtle::*;
 use std::error::Error;
+use std::fs;
+use std::fs::File;
 use std::io::Read;
 
 fn test_data_from_testsuite(manifest_uri: String, include_tests_types: &[&str]) -> Result<Vec<u8>> {
@@ -140,6 +142,14 @@ fn bench_parse_oxttl_turtle_with_turtle(c: &mut Criterion) {
     )
 }
 
+fn bench_parse_oxttl_dbpedia(c: &mut Criterion) {
+    parse_oxttl_turtle(
+        c,
+        "dbpedia",
+        fs::read_to_string("benches/dbpedia.ttl").unwrap().into(),
+    )
+}
+
 fn bench_parse_rio_ntriples_with_ntriples(c: &mut Criterion) {
     parse_rio_ntriples(
         c,
@@ -182,6 +192,14 @@ fn bench_parse_rio_turtle_with_turtle(c: &mut Criterion) {
     )
 }
 
+fn bench_parse_rio_dbpedia(c: &mut Criterion) {
+    parse_rio_turtle(
+        c,
+        "dbpedia",
+        fs::read_to_string("benches/dbpedia.ttl").unwrap().into(),
+    )
+}
+
 criterion_group!(
     w3c_testsuite,
     bench_parse_rio_ntriples_with_ntriples,
@@ -189,7 +207,9 @@ criterion_group!(
     bench_parse_rio_turtle_with_turtle,
     bench_parse_oxttl_ntriples_with_ntriples,
     bench_parse_oxttl_ntriples_with_turtle,
-    bench_parse_oxttl_turtle_with_turtle
+    bench_parse_oxttl_turtle_with_turtle,
+    bench_parse_rio_dbpedia,
+    bench_parse_oxttl_dbpedia
 );
 
 criterion_main!(w3c_testsuite);
